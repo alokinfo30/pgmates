@@ -1,0 +1,63 @@
+name: CI/CD Pipeline
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+      - name: Install Dependencies
+        run: |
+          cd payment-service && npm install
+          cd ../maintenance-service && npm install
+          cd ../notification-service && npm install
+          cd ../frontend && npm install
+          cd ../mobile-app && npm install
+      - name: Run Tests
+        run: |
+          cd payment-service && npm test
+          cd ../maintenance-service && npm test
+          cd ../notification-service && npm test
+      - name: Build Docker Images
+        run: docker-compose build
+      - name: Tag and Push Docker Images
+        run: |
+          docker tag payment-service:latest payment-service:${{ github.sha }}
+          docker tag maintenance-service:latest maintenance-service:${{ github.sha }}
+          docker tag notification-service:latest notification-service:${{ github.sha }}
+          docker tag api-gateway:latest api-gateway:${{ github.sha }}
+          docker tag frontend:latest frontend:${{ github.sha }}
+          # For local Minikube, no push to registry is needed; images are used locally
+      - name: Start Minikube
+        run: |
+          minikube start --memory=4096 --cpus=2
+      - name: Deploy to Minikube
+        run: |
+          kubectl apply -f payment-service/kubernetes.yaml
+          kubectl apply -f maintenance-service/kubernetes.yaml
+          kubectl apply -f notification-service/kubernetes.yaml
+          kubectl apply -f api-gateway/kubernetes.yaml
+          kubectl apply -f frontend/kubernetes.yaml
+      - name: Verify Deployment
+        run: |
+          kubectl wait --for=condition=ready pod -l app=payment-service --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=maintenance-service --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=notification-service --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=api-gateway --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=frontend --timeout=120s
+          minikube service api-gateway --url
+      - name: Run Integration Tests
+        run: |
+          API_URL=$(minikube service api-gateway --url)
+          curl --fail $API_URL/api/payments
+          curl --fail $API_URL/api/maintenance
